@@ -18,7 +18,7 @@ res = requests.post(URL,
 transcript_id = res.json()['id']
 
 while True:
-    polling_endpoint = URL + '/' + transrcipt_id
+    polling_endpoint = URL + '/' + transcript_id
     res = requests.get(polling_endpoint,
                         headers=HEADERS)
     
