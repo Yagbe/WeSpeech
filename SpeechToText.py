@@ -1,31 +1,30 @@
-import requests
-import time
+import io
+from google.oauth2 import service_account
+from google.cloud import speech
 
-AUDIO_URL = ""
-API_KEY = ""
 
-HEADERS = {
-    'authorization': API_KEY,
-    'content-type': 'application/json'
-}
+client_file = 'sa_speech.json'
+credentials = service_account.Credentials.from_service_account_file(client_file)
+client = speech.SpeechClient(credentials=credentials)
 
-URL = ''
+audio_file = 'input.wav'
+with io.open(audio_file, 'rb') as f:
+    content = f.read()
+    audio = speech.RecognitionAudio(content=content)
 
-res = requests.post(URL,
-    json={'audio_url': AUDIO_URL},
-    headers=HEADERS)
 
-transcript_id = res.json()['id']
+config = speech.RecognitionConfig(
+    encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+    sample_rate_hertz = 44100,
+    language_code = 'en-US'
+)
 
-while True:
-    polling_endpoint = URL + '/' + transcript_id
-    res = requests.get(polling_endpoint,headers=HEADERS)
-    
-    if res.json()['status'] == 'completed':
-        filename = transcript_id + '.txt'
-        with open(filename, 'w') as f:
-            f.write(res.json()['text'])
+response = client.recognize(config=config, audio=audio)
 
-        break
-    else:
-        time.sleep(60)
+f = open("Original.txt",'w')
+
+
+for result in response.results:
+    f.write(result.alternatives[0].transcript)
+f.close()
+
