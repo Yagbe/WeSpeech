@@ -19,8 +19,7 @@ transcript_id = res.json()['id']
 
 while True:
     polling_endpoint = URL + '/' + transcript_id
-    res = requests.get(polling_endpoint,
-                        headers=HEADERS)
+    res = requests.get(polling_endpoint,headers=HEADERS)
     
     if res.json()['status'] == 'completed':
         filename = transcript_id + '.txt'
