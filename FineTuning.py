@@ -180,7 +180,7 @@ def stop_translation_process():
     stop_translation = True  # Set the stop flag to True
 def gui_main():
     root = tk.Tk()
-    root.title("Speech Translation Application")
+    root.title("WeSpeech")
     root.geometry("400x150")  # Set a more appropriate initial size
 
     # Enhanced appearance
