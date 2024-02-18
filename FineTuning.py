@@ -1,20 +1,23 @@
 import os
-from google.cloud import speech
+import tkinter as tk
+from tkinter import ttk
+from google.cloud import speech, translate_v2 as translate, texttospeech
+from google.oauth2 import service_account
 import pyaudio
 from six.moves import queue
 import io
-from google.oauth2 import service_account
-from google.cloud import translate
-import time
-
-is_streaming = True
-
-client_file = 'sa_speech.json'
-credentials = service_account.Credentials.from_service_account_file(client_file)
-client = speech.SpeechClient(credentials=credentials)
+from pydub import AudioSegment
+from pydub.playback import play
 
 # Set up Google Cloud credentials
+client_file = 'sa_speech.json'
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = client_file
+credentials = service_account.Credentials.from_service_account_file(client_file)
+
+# Initialize clients for Google Cloud services
+speech_client = speech.SpeechClient(credentials=credentials)
+translate_client = translate.Client()
+text_to_speech_client = texttospeech.TextToSpeechClient()
 
 # Audio recording parameters
 RATE = 16000
@@ -38,7 +41,6 @@ class MicrophoneStream(object):
             frames_per_buffer=self._chunk,
             stream_callback=self._fill_buffer,
         )
-
         self.closed = False
         return self
 
@@ -72,8 +74,21 @@ class MicrophoneStream(object):
 
             yield b''.join(data)
 
-def listen_print_loop(responses):
-    """Iterates through server responses and prints them."""
+def translate_text(text, target_language="en"):
+    result = translate_client.translate(text, target_language=target_language)
+    return result['translatedText']
+
+def text_to_speech(text, language_code="en-US", gender=texttospeech.SsmlVoiceGender.NEUTRAL):
+    synthesis_input = texttospeech.SynthesisInput(text=text)
+    voice = texttospeech.VoiceSelectionParams(language_code=language_code, ssml_gender=gender)
+    audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+    response = text_to_speech_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
+    audio_mp3 = io.BytesIO(response.audio_content)
+    audio_mp3.seek(0)
+    song = AudioSegment.from_file(audio_mp3, format="mp3")
+    play(song)
+
+def listen_print_loop(responses, target_language="ko", tts_language_code="ko"):
     for response in responses:
         if not response.results:
             continue
@@ -81,49 +96,62 @@ def listen_print_loop(responses):
         result = response.results[0]
         if not result.alternatives:
             continue
-        
+
         transcript = result.alternatives[0].transcript
-        print(transcript)
-        
-        
-        def translate_text(text, target_language="en"):
-        
-            translate_client = translate.TranslationServiceClient()
-            # Use the project you specified for your translate client
-            project_id = "your-google-cloud-project-id"
-            parent = f"projects/{project_id}/locations/global"
+        if result.is_final:
+            print(f"Original: {transcript}")
+            translated_text = translate_text(transcript, target_language=target_language)
+            print(f"Translated ({target_language}): {translated_text}")
+            text_to_speech(translated_text, language_code=tts_language_code)
 
-            response = translate_client.translate_text(
-                request={
-                    "parent": parent,
-                    "contents": [text],
-                    "mime_type": "text/plain",  # mime types: text/plain, text/html
-                    "source_language_code": "en-US",
-                    "target_language_code": target_language,
-                }
-            )
-
-            # Return the translated text
-            return response.translations[0].translated_text
-                # Here, you can add the translation and text-to-speech synthesis part
-
-def main():
-    client = speech.SpeechClient()
+def main(input_language='en-US', output_language='ko'):
     config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=RATE,
-        language_code='en-US',
+        language_code=input_language
     )
 
     streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True)
 
     with MicrophoneStream(RATE, CHUNK) as stream:
         audio_generator = stream.generator()
-        requests = (speech.StreamingRecognizeRequest(audio_content=content)
-                    for content in audio_generator)
+        requests = (speech.StreamingRecognizeRequest(audio_content=content) for content in audio_generator)
+        responses = speech_client.streaming_recognize(streaming_config, requests)
+        listen_print_loop(responses, target_language=output_language, tts_language_code=output_language)
 
-        responses = client.streaming_recognize(streaming_config, requests)
-        listen_print_loop(responses)
+def run_application(input_language, output_language):
+    print(f"Running with input language: {input_language} and output language: {output_language}")
+    main(input_language, output_language)
+
+def gui_main():
+    root = tk.Tk()
+    root.title("Speech Translation Application")
+
+    languages = ['en-US', 'ko', 'es', 'fr', 'de', 'it', 'ja', 'pt', 'zh']
+    language_names = ['English (US)', 'Korean', 'Spanish', 'French', 'German', 'Italian', 'Japanese', 'Portuguese', 'Chinese']
+    language_codes = dict(zip(language_names, languages))
+
+    tk.Label(root, text="Select Input Language:").grid(row=0, column=0)
+    input_lang_var = tk.StringVar(root)
+    input_lang_dropdown = ttk.Combobox(root, textvariable=input_lang_var, values=language_names)
+    input_lang_dropdown.grid(row=0, column=1)
+    input_lang_dropdown.current(0)
+
+    tk.Label(root, text="Select Output Language:").grid(row=1, column=0)
+    output_lang_var = tk.StringVar(root)
+    output_lang_dropdown = ttk.Combobox(root, textvariable=output_lang_var, values=language_names)
+    output_lang_dropdown.grid(row=1, column=1)
+    output_lang_dropdown.current(1)
+
+    def on_start():
+        input_lang_code = language_codes[input_lang_var.get()]
+        output_lang_code = language_codes[output_lang_var.get()]
+        run_application(input_lang_code, output_lang_code)
+
+    start_button = tk.Button(root, text="Start", command=on_start)
+    start_button.grid(row=2, column=0, columnspan=2)
+
+    root.mainloop()
 
 if __name__ == '__main__':
-    main()
+    gui_main()
