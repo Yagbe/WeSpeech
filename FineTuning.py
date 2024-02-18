@@ -8,6 +8,9 @@ from six.moves import queue
 import io
 from pydub import AudioSegment
 from pydub.playback import play
+import threading
+
+stop_translation = False
 
 # Set up Google Cloud credentials
 client_file = 'sa_speech.json'
@@ -89,7 +92,14 @@ def text_to_speech(text, language_code="en-US", gender=texttospeech.SsmlVoiceGen
     play(song)
 
 def listen_print_loop(responses, target_language="ko", tts_language_code="ko"):
+    global stop_translation  # Access the global variable
+    
+    translated_text_cache = ""  # Cache to store the previously translated text
     for response in responses:
+        if stop_translation:  # Check if the stop flag is set
+            print("Translation stopped.")
+            break
+
         if not response.results:
             continue
 
@@ -99,10 +109,14 @@ def listen_print_loop(responses, target_language="ko", tts_language_code="ko"):
 
         transcript = result.alternatives[0].transcript
         if result.is_final:
-            print(f"Original: {transcript}")
             translated_text = translate_text(transcript, target_language=target_language)
-            print(f"Translated ({target_language}): {translated_text}")
-            text_to_speech(translated_text, language_code=tts_language_code)
+
+            # Check if the translated text has changed
+            if translated_text != translated_text_cache:
+                print(f"Original: {transcript}")
+                print(f"Translated ({target_language}): {translated_text}")
+                text_to_speech(translated_text, language_code=tts_language_code)
+                translated_text_cache = translated_text  # Update the cache
 
 def main(input_language='en-US', output_language='ko'):
     config = speech.RecognitionConfig(
@@ -123,47 +137,86 @@ def run_application(input_language, output_language):
     print(f"Running with input language: {input_language} and output language: {output_language}")
     main(input_language, output_language)
 
+def start_speech_translation(input_language, output_language):
+    # This function wraps your main logic and is meant to be run in a background thread
+    try:
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=RATE,
+            language_code=input_language
+        )
 
+        streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True)
+
+        with MicrophoneStream(RATE, CHUNK) as stream:
+            audio_generator = stream.generator()
+            requests = (speech.StreamingRecognizeRequest(audio_content=content) for content in audio_generator)
+            responses = speech_client.streaming_recognize(streaming_config, requests)
+            listen_print_loop(responses, target_language=output_language, tts_language_code=output_language)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+def start_translation(input_language, output_language):
+    global stop_translation  # Access the global variable
+    stop_translation = False  # Reset the stop flag
+    
+    try:
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=RATE,
+            language_code=input_language
+        )
+
+        streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True)
+
+        with MicrophoneStream(RATE, CHUNK) as stream:
+            audio_generator = stream.generator()
+            requests = (speech.StreamingRecognizeRequest(audio_content=content) for content in audio_generator)
+            responses = speech_client.streaming_recognize(streaming_config, requests)
+            listen_print_loop(responses, target_language=output_language, tts_language_code=output_language)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+def stop_translation_process():
+    global stop_translation  # Access the global variable
+    stop_translation = True  # Set the stop flag to True
 def gui_main():
-    """Initializes the GUI for language selection and starts the application."""
     root = tk.Tk()
     root.title("Speech Translation Application")
+    root.geometry("400x150")  # Set a more appropriate initial size
 
-    # Setup language options
+    # Enhanced appearance
+    ttk.Style().configure("TLabel", padding=5, font="Sans 10")
+    ttk.Style().configure("TButton", padding=5, font="Sans 10")
+    ttk.Style().configure("TCombobox", padding=5, font="Sans 10")
+
     languages = ['en-US', 'ko', 'es', 'fr', 'de', 'it', 'ja', 'pt', 'zh']
     language_names = ['English (US)', 'Korean', 'Spanish', 'French', 'German', 'Italian', 'Japanese', 'Portuguese', 'Chinese']
     language_codes = dict(zip(language_names, languages))
 
-    # Input language selection
-    tk.Label(root, text="Select Input Language:").grid(row=0, column=0)
+    ttk.Label(root, text="Select Input Language:").grid(row=0, column=0, sticky="ew")
     input_lang_var = tk.StringVar(root)
-    input_lang_dropdown = ttk.Combobox(root, textvariable=input_lang_var, values=language_names)
-    input_lang_dropdown.grid(row=0, column=1)
+    input_lang_dropdown = ttk.Combobox(root, textvariable=input_lang_var, values=language_names, state="readonly")
+    input_lang_dropdown.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
     input_lang_dropdown.current(0)
 
-    # Output language selection
-    tk.Label(root, text="Select Output Language:").grid(row=1, column=0)
+    ttk.Label(root, text="Select Output Language:").grid(row=1, column=0, sticky="ew")
     output_lang_var = tk.StringVar(root)
-    output_lang_dropdown = ttk.Combobox(root, textvariable=output_lang_var, values=language_names)
-    output_lang_dropdown.grid(row=1, column=1)
+    output_lang_dropdown = ttk.Combobox(root, textvariable=output_lang_var, values=language_names, state="readonly")
+    output_lang_dropdown.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
     output_lang_dropdown.current(1)
 
     def on_start():
-        """Callback function to start the application based on selected languages."""
-        input_lang_code = language_codes[input_lang_var.get()]
-        output_lang_code = language_codes[output_lang_var.get()]
-        run_application(input_lang_code, output_lang_code)
+        input_lang_code = language_codes[input_lang_var.get()]  # Use language codes directly
+        output_lang_code = language_codes[output_lang_var.get()]  # Use language codes directly
+        threading.Thread(target=start_translation, args=(input_lang_code, output_lang_code), daemon=True).start()
 
-    def on_end():
-        """Callback function to end the application."""
-        if messagebox.askokcancel("Quit", "Do you want to quit?"):
-            root.destroy()
+    def on_stop():
+        threading.Thread(target=stop_translation_process, daemon=True).start()
 
-    start_button = tk.Button(root, text="Start", command=on_start)
-    start_button.grid(row=2, column=0, sticky=tk.W+tk.E)
+    start_button = ttk.Button(root, text="Start", command=on_start)
+    start_button.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
 
-    end_button = tk.Button(root, text="End", command=on_end)
-    end_button.grid(row=2, column=1, sticky=tk.W+tk.E)
+    stop_button = ttk.Button(root, text="Stop", command=on_stop)
+    stop_button.grid(row=2, column=1, sticky="ew", padx=5, pady=5)
 
     root.mainloop()
 
